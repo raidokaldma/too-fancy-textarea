@@ -1,0 +1,1404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Too Fancy Textarea</title>
+<script>
+  document.documentElement.dataset.theme = localStorage.getItem('theme') ?? 'dark';
+</script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Light: heat reads as orange instead of white, and burnt glyphs cool to pale ash. */
+  :root {
+    color-scheme: light;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+    --page: #e6ebf0;
+    --plate: #f7f9fb;
+    --border: rgba(20, 24, 30, .12);
+    --shadow: 0 18px 48px rgba(20, 24, 30, .1);
+    --heading: #111922;
+    --muted: #7a828b;
+    --text: #2c3845;
+    --arc: #0a6fc2;
+    --cursor: #6bbcf5;
+    --on-cursor: #0b2238;
+    --spark: #d86f00;
+    --hot: #f26a0c;
+    --ember: #ff5414;
+    --burn: #d42412;
+    --flame: #e89a00;
+    --char: #b9aaa0;
+    --smoke: #b4bcc6;
+    --flash-strength: .4;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #05080c;
+    --plate: #0a0f15;
+    --border: rgba(255, 255, 255, .07);
+    --shadow: 0 18px 60px rgba(0, 0, 0, .5);
+    --heading: #dbe4ee;
+    --muted: #5d6875;
+    --text: #aebccb;
+    --arc: #8fd4ff;
+    --cursor: #8fd4ff;
+    --on-cursor: #0a0f15;
+    --spark: #ffb44a;
+    --hot: #fff3d2;
+    --ember: #ff5414;
+    --burn: #ff3a2a;
+    --flame: #ffd75a;
+    --char: #040405;
+    --smoke: #9aa0a6;
+    --flash-strength: 1;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--page);
+    font-family: var(--mono);
+  }
+
+  main {
+    min-height: 100dvh;
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 56px 16px 40px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 28px;
+  }
+
+  h1 {
+    margin: 0;
+    color: var(--heading);
+    font-size: clamp(22px, 4vw, 32px);
+    font-weight: 500;
+  }
+
+  .editor {
+    position: relative;
+    width: 100%;
+    height: clamp(240px, 58vh, 540px);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--plate);
+    box-shadow: var(--shadow);
+  }
+  /* Receives keyboard, IME and clipboard input. Everything visible is drawn on the canvas. */
+  .editor textarea {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    outline: none;
+    resize: none;
+    opacity: 0;
+    font-size: 16px; /* smaller sizes make iOS zoom in on focus */
+    cursor: text;
+    touch-action: none;
+  }
+
+  /* Covers the whole window so sparks can fly out of the editors. */
+  canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  button {
+    font-family: inherit;
+    cursor: pointer;
+  }
+
+  .demo-button {
+    padding: 10px 22px;
+    border: 1px solid color-mix(in srgb, var(--arc) 55%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--arc) 10%, transparent);
+    color: var(--arc);
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .demo-button:hover { background: color-mix(in srgb, var(--arc) 18%, transparent); }
+
+  .theme-toggle {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--muted);
+  }
+  .theme-toggle:hover { color: var(--heading); }
+</style>
+</head>
+<body>
+
+<button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle dark mode">
+  <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+    <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
+    <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/>
+  </svg>
+</button>
+
+<main>
+  <h1>Too Fancy Textarea</h1>
+  <div class="editor">
+    <textarea aria-label="Text editor" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+  </div>
+  <button class="demo-button" id="demo-button" type="button">Play demo</button>
+</main>
+
+<canvas></canvas>
+
+<script type="module">
+// ---------- configuration ----------
+
+const PLACEHOLDER = 'Start typing…';
+const COMPACT_WIDTH = 520;          // narrower editors get a smaller font and padding
+
+const HEAT_DURATION_MS = 1100;      // a typed glyph cools from white heat to the text color
+const BURN_DURATION_MS = 800;       // a deleted glyph flares, reddens and chars
+const FLASH_DURATION_MS = 140;
+const MAX_PARTICLES = 1600;
+const SMOKE_PEAK_ALPHA = .3;
+const CURSOR_TRANSIT_ALPHA = .28;
+const CURSOR_MAX_STRETCH_CHARS = 5;
+const CURSOR_LEAD_SECONDS = .012;   // easing time of the corner nearest the destination
+const CURSOR_TRAIL_SECONDS = .075;  // easing time of the corner farthest from it
+const UNDO_LIMIT = 200;
+const UNDO_GROUP_MS = 600;          // keystrokes closer together than this undo as one step
+const MULTI_CLICK_MS = 380;
+
+// Each hidden textarea always holds this one selected character. Typing replaces it,
+// so every keystroke arrives as an input event, and an empty value means Backspace.
+const SENTINEL = '¤';
+
+const prefersReducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+
+// ---------- shared state: one canvas and one set of particles for all editors ----------
+
+const canvas = document.querySelector('canvas');
+const ctx = canvas.getContext('2d');
+const demoButton = document.getElementById('demo-button');
+const themeButton = document.getElementById('theme-toggle');
+const monoFont = getComputedStyle(document.documentElement).getPropertyValue('--mono');
+
+const viewport = { width: 0, height: 0, pixelRatio: 1 };
+let palette = readPalette();
+let particles = [];
+let flashes = [];
+let lastFrameTime = 0;
+let demoRun = { stopped: true };
+
+// ---------- helpers ----------
+
+function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+function mix(from, to, t) { return from.map((channel, i) => channel + (to[i] - channel) * t); }
+function smoothstep(t) { return t * t * (3 - 2 * t); }
+function rgba([r, g, b], alpha = 1) { return `rgba(${r | 0},${g | 0},${b | 0},${alpha})`; }
+function hexToRgb(hex) { return [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)); }
+function isBlank(char) { return /\s/.test(char); }
+
+function readPalette() {
+  const style = getComputedStyle(document.documentElement);
+  const color = name => hexToRgb(style.getPropertyValue(name).trim());
+  return {
+    text: color('--text'), cursor: color('--cursor'), onCursor: color('--on-cursor'),
+    spark: color('--spark'), hot: color('--hot'), ember: color('--ember'),
+    burn: color('--burn'), flame: color('--flame'), char: color('--char'), smoke: color('--smoke'),
+    flashStrength: parseFloat(style.getPropertyValue('--flash-strength')),
+  };
+}
+
+function resizeCanvas() {
+  viewport.pixelRatio = window.devicePixelRatio || 1;
+  viewport.width = window.innerWidth;
+  viewport.height = window.innerHeight;
+  canvas.width = Math.round(viewport.width * viewport.pixelRatio);
+  canvas.height = Math.round(viewport.height * viewport.pixelRatio);
+}
+
+// ---------- the editor ----------
+
+class FancyTextarea {
+  constructor(element) {
+    this.element = element;
+    this.input = element.querySelector('textarea');
+    this.doc = {
+      cells: [],            // { char, struckAt }
+      rows: [],             // visual rows after wrapping: { start, end }
+      caret: 0,
+      anchor: 0,            // the other end of the selection; equal to caret when nothing is selected
+      preferredColumn: 0,   // the column vertical moves try to return to
+    };
+    this.metrics = {
+      font: '', lineHeight: 26, cursorHeight: 21, cursorInset: 2, padding: 20,
+      charWidth: 0, viewHeight: 0, columns: 1, visibleRowCount: 1,
+    };
+    this.view = { scroll: 0, scrollTarget: 0 };
+    this.cursor = {
+      corners: [[0, 0], [0, 0], [0, 0], [0, 0]],
+      cornerEasing: [0, 0, 0, 0],
+      targetX: 0,
+      targetY: 0,
+      alpha: 1,
+      snapNext: true,
+    };
+    this.undoHistory = { undo: [], redo: [], lastKind: 'other', lastTime: 0 };
+    this.composition = { active: false, start: 0, chars: [] };
+    this.gesture = { kind: 'none' };   // 'none' | 'select' { unit, base } | 'touch-scroll' { startY, startScroll, moved }
+    this.clicks = { count: 0, lastTime: 0, lastIndex: -1 };
+    this.burningGlyphs = [];
+    this.lastActivity = 0;
+
+    this.listen();
+    new ResizeObserver(() => this.measure()).observe(element);
+  }
+
+  listen() {
+    const on = (type, handler, options) => this.input.addEventListener(type, handler, options);
+    on('keydown', event => this.handleKeyDown(event));
+    on('input', () => this.handleInput());
+    on('compositionstart', () => this.startComposition());
+    on('compositionend', event => this.endComposition(event));
+    on('copy', event => this.handleCopy(event));
+    on('cut', event => this.handleCut(event));
+    on('paste', event => this.handlePaste(event));
+    on('mousedown', event => event.preventDefault());        // keep the native selection on the sentinel
+    on('contextmenu', () => this.resetInputBuffer());         // so the menu sees a selection to cut or copy
+    on('pointerdown', event => this.handlePointerDown(event));
+    on('pointermove', event => this.handlePointerMove(event));
+    on('pointerup', event => this.handlePointerEnd(event));
+    on('pointercancel', event => this.handlePointerEnd(event));
+    on('wheel', event => this.handleWheel(event), { passive: false });
+  }
+
+  // ---------- layout ----------
+
+  measure() {
+    const { element } = this;
+    const compact = element.clientWidth < COMPACT_WIDTH;
+    const fontSize = compact ? 14 : 16;
+    const lineHeight = Math.round(fontSize * 1.6);
+    const cursorHeight = Math.round(fontSize * 1.34);
+    const padding = compact ? 14 : 20;
+    const font = `${fontSize}px ${monoFont}`;
+    ctx.font = font;
+    const charWidth = ctx.measureText('M').width;
+    const viewHeight = element.clientHeight - padding * 2;
+
+    Object.assign(this.metrics, {
+      font, lineHeight, cursorHeight, padding, charWidth, viewHeight,
+      cursorInset: (lineHeight - cursorHeight) / 2,
+      columns: Math.max(1, Math.floor((element.clientWidth - padding * 2) / charWidth)),
+      visibleRowCount: Math.max(1, Math.floor(viewHeight / lineHeight)),
+    });
+    this.layoutRows();
+    this.scrollCaretIntoView();
+    this.view.scroll = this.view.scrollTarget;
+    this.cursor.snapNext = true;
+  }
+
+  /** The editor's inner area in viewport coordinates, and where its first glyph sits. */
+  box() {
+    const { element } = this;
+    const rect = element.getBoundingClientRect();
+    const left = rect.left + element.clientLeft, top = rect.top + element.clientTop;
+    return {
+      left, top, width: element.clientWidth, height: element.clientHeight,
+      textLeft: left + this.metrics.padding, textTop: top + this.metrics.padding,
+    };
+  }
+
+  layoutRows() {
+    const { doc } = this, { columns } = this.metrics;
+    doc.rows = [];
+    let lineStart = 0;
+    for (let i = 0; i <= doc.cells.length; i++) {
+      if (i < doc.cells.length && doc.cells[i].char !== '\n') continue;
+      let start = lineStart;
+      while (i - start > columns) {
+        const end = this.wrapPoint(start, start + columns);
+        doc.rows.push({ start, end });
+        start = end;
+      }
+      doc.rows.push({ start, end: i });
+      lineStart = i + 1;
+    }
+  }
+
+  // Wrap after the last space that fits, like a textarea. A word longer than the row is cut at the edge.
+  wrapPoint(start, limit) {
+    let end = limit;
+    while (end > start && this.doc.cells[end - 1].char !== ' ') end--;
+    return end > start ? end : limit;
+  }
+
+  rowIndexOf(index) {
+    const { rows } = this.doc;
+    let low = 0, high = rows.length - 1;
+    while (low < high) {
+      const middle = (low + high + 1) >> 1;
+      if (rows[middle].start <= index) low = middle; else high = middle - 1;
+    }
+    return low;
+  }
+
+  isSoftWrapped(rowIndex) {
+    const next = this.doc.rows[rowIndex + 1];
+    return next !== undefined && next.start === this.doc.rows[rowIndex].end;
+  }
+
+  // The last index of a soft-wrapped row is drawn at the start of the next row, so it does not count.
+  rowLength(rowIndex) {
+    const row = this.doc.rows[rowIndex];
+    return row.end - row.start - (this.isSoftWrapped(rowIndex) ? 1 : 0);
+  }
+
+  positionOf(index) {
+    const rowIndex = this.rowIndexOf(index);
+    return { x: (index - this.doc.rows[rowIndex].start) * this.metrics.charWidth, y: rowIndex * this.metrics.lineHeight };
+  }
+
+  indexAtPoint(clientX, clientY) {
+    const box = this.box(), { rows } = this.doc, { charWidth, lineHeight } = this.metrics;
+    const x = clientX - box.textLeft;
+    const y = clientY - box.textTop + this.view.scroll;
+    const row = rows[clamp(Math.floor(y / lineHeight), 0, rows.length - 1)];
+    return row.start + clamp(Math.round(x / charWidth), 0, row.end - row.start);
+  }
+
+  visibleRowRange(scrollY) {
+    const { lineHeight, padding, viewHeight } = this.metrics;
+    const lastRow = this.doc.rows.length - 1;
+    return {
+      first: clamp(Math.floor((scrollY - padding) / lineHeight), 0, lastRow),
+      last: clamp(Math.floor((scrollY + viewHeight + padding) / lineHeight), 0, lastRow),
+    };
+  }
+
+  maxScroll() { return Math.max(0, this.doc.rows.length * this.metrics.lineHeight - this.metrics.viewHeight); }
+
+  scrollCaretIntoView() {
+    const { view } = this, { lineHeight, viewHeight } = this.metrics;
+    const { y } = this.positionOf(this.doc.caret);
+    if (y < view.scrollTarget) view.scrollTarget = y;
+    else if (y + lineHeight > view.scrollTarget + viewHeight) view.scrollTarget = y + lineHeight - viewHeight;
+    view.scrollTarget = clamp(view.scrollTarget, 0, this.maxScroll());
+  }
+
+  // ---------- editing ----------
+
+  hasSelection() { return this.doc.caret !== this.doc.anchor; }
+  selectionRange() { return { start: Math.min(this.doc.caret, this.doc.anchor), end: Math.max(this.doc.caret, this.doc.anchor) }; }
+  textBetween(start, end) { return this.doc.cells.slice(start, end).map(cell => cell.char).join(''); }
+  text() { return this.textBetween(0, this.doc.cells.length); }
+
+  afterCaretChange({ keepColumn = false } = {}) {
+    const { doc } = this;
+    this.lastActivity = performance.now();
+    if (!keepColumn) doc.preferredColumn = doc.caret - doc.rows[this.rowIndexOf(doc.caret)].start;
+    this.scrollCaretIntoView();
+  }
+
+  moveCaret(index, extend = false, options) {
+    this.doc.caret = clamp(index, 0, this.doc.cells.length);
+    if (!extend) this.doc.anchor = this.doc.caret;
+    this.afterCaretChange(options);
+  }
+
+  select(start, end) {
+    this.doc.anchor = start;
+    this.doc.caret = end;
+    this.afterCaretChange();
+  }
+
+  selectAll() { this.select(0, this.doc.cells.length); }
+
+  /** kind: 'typing' and 'deleting' merge with the previous step of the same kind; 'other' never merges. */
+  recordUndo(kind) {
+    const history = this.undoHistory, now = performance.now();
+    const continuesGroup = kind !== 'other' && kind === history.lastKind && now - history.lastTime < UNDO_GROUP_MS;
+    history.lastKind = kind;
+    history.lastTime = now;
+    if (continuesGroup) return;
+    history.undo.push({ cells: this.doc.cells.slice(), caret: this.doc.caret });
+    if (history.undo.length > UNDO_LIMIT) history.undo.shift();
+    history.redo.length = 0;
+  }
+
+  restoreFrom(source, destination) {
+    const snapshot = source.pop();
+    if (!snapshot) return;
+    destination.push({ cells: this.doc.cells.slice(), caret: this.doc.caret });
+    this.doc.cells = snapshot.cells;
+    this.doc.caret = this.doc.anchor = snapshot.caret;
+    this.undoHistory.lastKind = 'other';
+    this.layoutRows();
+    this.afterCaretChange();
+  }
+
+  undo() { this.restoreFrom(this.undoHistory.undo, this.undoHistory.redo); }
+  redo() { this.restoreFrom(this.undoHistory.redo, this.undoHistory.undo); }
+
+  /** Everything needed to put the editor back as it was; used by the demo. */
+  snapshot() {
+    return { cells: this.doc.cells.slice(), caret: this.doc.caret, undoDepth: this.undoHistory.undo.length };
+  }
+
+  restoreSnapshot(snapshot, { cells = snapshot.cells } = {}) {
+    this.doc.cells = cells;
+    this.layoutRows();
+    this.moveCaret(snapshot.caret);
+    this.undoHistory.undo.length = snapshot.undoDepth;
+    this.undoHistory.redo.length = 0;
+    this.undoHistory.lastKind = 'other';
+  }
+
+  insertText(rawText) {
+    const { doc } = this;
+    const text = rawText.replace(/\r\n?/g, '\n').replace(/\t/g, '  ');
+    if (!text) return;
+    if (this.hasSelection()) {
+      const { start, end } = this.selectionRange();
+      this.removeRange(start, end);
+    }
+    const now = performance.now(), at = doc.caret;
+    // A paste ignites as a quick wave rather than all at once.
+    const added = Array.from(text, (char, i) => ({ char, struckAt: now + Math.min(i * 3, 360) }));
+    doc.cells = doc.cells.slice(0, at).concat(added, doc.cells.slice(at));
+    doc.caret = doc.anchor = at + added.length;
+    this.layoutRows();
+    this.afterCaretChange();
+    this.strikeSparks(at, doc.caret);
+  }
+
+  removeRange(start, end) {
+    this.igniteRange(start, end);
+    this.doc.cells.splice(start, end - start);
+    this.doc.caret = this.doc.anchor = start;
+    this.layoutRows();
+  }
+
+  typeText(text) {
+    this.recordUndo(text.length === 1 && text !== '\n' ? 'typing' : 'other');
+    this.insertText(text);
+  }
+
+  pasteText(text) {
+    this.recordUndo('other');
+    this.insertText(text);
+  }
+
+  deleteRange(start, end) {
+    this.recordUndo(end - start === 1 ? 'deleting' : 'other');
+    this.removeRange(start, end);
+    this.afterCaretChange();
+  }
+
+  deleteSelection() {
+    const { start, end } = this.selectionRange();
+    if (start < end) this.deleteRange(start, end);
+  }
+
+  /** direction: -1 deletes backward, 1 forward. unit: 'char' | 'word' | 'line'. */
+  deleteBy(direction, unit) {
+    if (this.hasSelection()) { this.deleteSelection(); return; }
+    const { caret } = this.doc;
+    let target = this.caretTarget(direction, unit);
+    if (target === caret) target += direction; // at a row edge, join with the neighboring row
+    target = clamp(target, 0, this.doc.cells.length);
+    const start = Math.min(caret, target), end = Math.max(caret, target);
+    if (start < end) this.deleteRange(start, end);
+  }
+
+  caretTarget(direction, unit) {
+    const { caret } = this.doc;
+    if (unit === 'char') return caret + direction;
+    if (unit === 'line') return direction < 0 ? this.caretRowStart() : this.caretRowEnd();
+    return direction < 0 ? this.wordStartBefore(caret) : this.wordEndAfter(caret);
+  }
+
+  caretRowStart() { return this.doc.rows[this.rowIndexOf(this.doc.caret)].start; }
+
+  caretRowEnd() {
+    const rowIndex = this.rowIndexOf(this.doc.caret);
+    return this.doc.rows[rowIndex].start + this.rowLength(rowIndex);
+  }
+
+  characterClass(index) {
+    const char = this.doc.cells[index].char;
+    if (isBlank(char)) return 'space';
+    return /[\p{L}\p{N}_]/u.test(char) ? 'word' : 'punctuation';
+  }
+
+  wordStartBefore(index) {
+    while (index > 0 && this.characterClass(index - 1) === 'space') index--;
+    if (index === 0) return 0;
+    const kind = this.characterClass(index - 1);
+    while (index > 0 && this.characterClass(index - 1) === kind) index--;
+    return index;
+  }
+
+  wordEndAfter(index) {
+    const count = this.doc.cells.length;
+    if (index === count) return count;
+    const kind = this.characterClass(index);
+    while (index < count && this.characterClass(index) === kind) index++;
+    while (index < count && this.characterClass(index) === 'space') index++;
+    return index;
+  }
+
+  /** The word or paragraph around index, without crossing a line break. unit: 'word' | 'paragraph'. */
+  unitRangeAt(index, unit) {
+    const { cells } = this.doc, count = cells.length;
+    if (unit === 'paragraph') {
+      let start = Math.min(index, count), end = start;
+      while (start > 0 && cells[start - 1].char !== '\n') start--;
+      while (end < count && cells[end].char !== '\n') end++;
+      return { start, end };
+    }
+    const at = Math.min(index, count - 1);
+    if (at < 0 || cells[at].char === '\n') return { start: Math.min(index, count), end: Math.min(index, count) };
+    const kind = this.characterClass(at);
+    let start = at, end = at;
+    while (start > 0 && cells[start - 1].char !== '\n' && this.characterClass(start - 1) === kind) start--;
+    while (end < count && cells[end].char !== '\n' && this.characterClass(end) === kind) end++;
+    return { start, end };
+  }
+
+  moveHorizontally(direction, unit, extend) {
+    if (!extend && this.hasSelection() && unit === 'char') {
+      const { start, end } = this.selectionRange();
+      this.moveCaret(direction < 0 ? start : end);
+    } else {
+      this.moveCaret(this.caretTarget(direction, unit), extend);
+    }
+  }
+
+  moveVertically(rowDelta, extend) {
+    const { doc } = this;
+    const rowIndex = this.rowIndexOf(doc.caret);
+    const targetIndex = clamp(rowIndex + rowDelta, 0, doc.rows.length - 1);
+    if (targetIndex === rowIndex) {
+      this.moveCaret(rowDelta < 0 ? 0 : doc.cells.length, extend, { keepColumn: true });
+      return;
+    }
+    const row = doc.rows[targetIndex];
+    this.moveCaret(row.start + Math.min(doc.preferredColumn, this.rowLength(targetIndex)), extend, { keepColumn: true });
+  }
+
+  // ---------- effects ----------
+
+  glyphCenter(index, box) {
+    const position = this.positionOf(index);
+    return {
+      x: box.textLeft + position.x + this.metrics.charWidth / 2,
+      y: box.textTop + position.y - this.view.scrollTarget + this.metrics.lineHeight / 2,
+    };
+  }
+
+  strikeSparks(start, end) {
+    const { rows, cells } = this.doc;
+    const { first, last } = this.visibleRowRange(this.view.scrollTarget);
+    const from = Math.max(start, rows[first].start);
+    const span = Math.min(end, rows[last].end) - from;
+    if (span <= 0) return;
+    const box = this.box();
+    if (span === 1) {
+      if (isBlank(cells[from].char)) return;
+      const center = this.glyphCenter(from, box);
+      burst(center.x, center.y, 1);
+      return;
+    }
+    // A paste sprays weaker bursts from a jittered sample of the glyphs that landed on screen.
+    const { charWidth, lineHeight } = this.metrics;
+    const count = Math.min(span, 28 + Math.floor(Math.random() * 14));
+    for (let k = 0; k < count; k++) {
+      const index = from + Math.min(span - 1, Math.floor((k + Math.random()) * span / count));
+      if (isBlank(cells[index].char)) continue;
+      const center = this.glyphCenter(index, box);
+      burst(
+        center.x + charWidth * (Math.random() - .5) * .6,
+        center.y + (Math.random() - .5) * lineHeight * .3,
+        .2 + Math.random() * .25,
+      );
+    }
+  }
+
+  igniteRange(start, end) {
+    const { rows, cells } = this.doc;
+    const now = performance.now();
+    const { first, last } = this.visibleRowRange(this.view.scrollTarget);
+    const from = Math.max(start, rows[first].start), to = Math.min(end, rows[last].end);
+    const burnable = [];
+    for (let i = from; i < to; i++) if (!isBlank(cells[i].char)) burnable.push(i);
+
+    // Embers and smoke are spread at random over the whole deletion, so a big one stays cheap.
+    const emberChance = Math.min(1, 40 / burnable.length);
+    const smokeChance = Math.min(1, 24 / burnable.length);
+    const embersPerGlyph = burnable.length <= 16 ? 3 : 2;
+    const box = this.box();
+    burnable.forEach((index, order) => {
+      const position = this.positionOf(index), delayMs = Math.min(order * 2, 240);
+      this.burningGlyphs.push({ char: cells[index].char, x: position.x, y: position.y, startsAt: now + delayMs });
+      if (prefersReducedMotion) return;
+      const x = box.textLeft + position.x, y = box.textTop + position.y - this.view.scrollTarget;
+      if (Math.random() < emberChance) emitEmbers(x, y, delayMs / 1000, embersPerGlyph, this.metrics);
+      if (Math.random() < smokeChance) emitSmoke(x, y, delayMs / 1000, this.metrics);
+    });
+  }
+
+  // ---------- cursor motion ----------
+
+  cornerOffsets() {
+    const { charWidth: width, cursorHeight: height } = this.metrics;
+    return [[0, 0], [width, 0], [width, height], [0, height]];
+  }
+
+  /** Eases the cursor's corners toward the caret. Returns whether the cursor is still in transit. */
+  updateCursorShape(target, dt) {
+    const { cursor } = this;
+    const offsets = this.cornerOffsets();
+    if (cursor.snapNext || prefersReducedMotion) {
+      cursor.corners = offsets.map(([x, y]) => [target.x + x, target.y + y]);
+      cursor.snapNext = false;
+      cursor.targetX = target.x;
+      cursor.targetY = target.y;
+      return false;
+    }
+    if (target.x !== cursor.targetX || target.y !== cursor.targetY) {
+      cursor.targetX = target.x;
+      cursor.targetY = target.y;
+      this.retimeCorners(target, offsets);
+    }
+    let moving = false;
+    offsets.forEach(([offsetX, offsetY], i) => {
+      const goalX = target.x + offsetX, goalY = target.y + offsetY;
+      const corner = cursor.corners[i];
+      const step = 1 - Math.exp(-dt / cursor.cornerEasing[i]);
+      corner[0] += (goalX - corner[0]) * step;
+      corner[1] += (goalY - corner[1]) * step;
+      if (Math.abs(goalX - corner[0]) < .5 && Math.abs(goalY - corner[1]) < .5) {
+        corner[0] = goalX;
+        corner[1] = goalY;
+      } else {
+        moving = true;
+      }
+    });
+    if (moving) this.capStretch(target, offsets);
+    return moving;
+  }
+
+  // The corner nearest the destination is pulled first and the farthest last,
+  // so the block stretches toward where it is going.
+  retimeCorners(target, offsets) {
+    const { cursor } = this, { charWidth: width, cursorHeight: height } = this.metrics;
+    const centerX = cursor.corners.reduce((sum, corner) => sum + corner[0], 0) / 4;
+    const centerY = cursor.corners.reduce((sum, corner) => sum + corner[1], 0) / 4;
+    let dx = target.x + width / 2 - centerX, dy = target.y + height / 2 - centerY;
+    const distance = Math.hypot(dx, dy) || 1;
+    dx /= distance;
+    dy /= distance;
+    const halfExtent = (Math.abs(dx) * width + Math.abs(dy) * height) / 2 || 1;
+    offsets.forEach(([offsetX, offsetY], i) => {
+      const lead = ((offsetX - width / 2) * dx + (offsetY - height / 2) * dy) / halfExtent; // 1 leads, -1 trails
+      cursor.cornerEasing[i] = CURSOR_LEAD_SECONDS + (1 - lead) / 2 * (CURSOR_TRAIL_SECONDS - CURSOR_LEAD_SECONDS);
+    });
+  }
+
+  capStretch(target, offsets) {
+    const { corners } = this.cursor;
+    const remaining = offsets.map(([offsetX, offsetY], i) => [
+      corners[i][0] - target.x - offsetX,
+      corners[i][1] - target.y - offsetY,
+    ]);
+    const distances = remaining.map(([x, y]) => Math.hypot(x, y));
+    const leader = remaining[distances.indexOf(Math.min(...distances))];
+    const maxStretch = CURSOR_MAX_STRETCH_CHARS * this.metrics.charWidth;
+    remaining.forEach(([x, y], i) => {
+      const dx = x - leader[0], dy = y - leader[1], stretch = Math.hypot(dx, dy);
+      if (stretch <= maxStretch) return;
+      corners[i][0] = target.x + offsets[i][0] + leader[0] + dx * maxStretch / stretch;
+      corners[i][1] = target.y + offsets[i][1] + leader[1] + dy * maxStretch / stretch;
+    });
+  }
+
+  // ---------- rendering ----------
+
+  draw(now, dt) {
+    const { view } = this;
+    if (!this.metrics.charWidth) return;
+    const scrollGap = view.scrollTarget - view.scroll;
+    view.scroll = prefersReducedMotion || Math.abs(scrollGap) < .5
+      ? view.scrollTarget
+      : view.scroll + scrollGap * (1 - Math.exp(-dt / .07));
+
+    const caretPosition = this.positionOf(this.doc.caret);
+    const cursorMoving = this.updateCursorShape(caretPosition, dt);
+
+    // The editor moves with the page, so its position is read every frame.
+    const box = this.box();
+    const origin = { x: box.textLeft, y: box.textTop - view.scroll };
+    const rows = this.visibleRowRange(view.scroll);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(box.left, box.top, box.width, box.height);
+    ctx.clip(); // text stays inside the editor
+    ctx.font = this.metrics.font;
+    ctx.textBaseline = 'middle';
+    this.drawSelection(rows, origin);
+    this.drawPlaceholder(origin);
+    this.drawText(rows, origin);
+    this.drawHeat(now, rows, origin);
+    this.drawBurningGlyphs(now, origin); // after the live text, so a line moving up into the gap does not hide the burn
+    this.drawScrollThumb(box);
+    this.drawCursor(now, dt, caretPosition, cursorMoving, origin);
+    ctx.restore();
+  }
+
+  glyphY(rowTop) { return rowTop + this.metrics.lineHeight / 2 + 1; }
+  columnX(index, row, origin) { return origin.x + (index - row.start) * this.metrics.charWidth; }
+
+  drawSelection({ first, last }, origin) {
+    if (!this.hasSelection()) return;
+    const { start, end } = this.selectionRange();
+    const { charWidth, lineHeight } = this.metrics;
+    ctx.fillStyle = rgba(palette.cursor, .2);
+    for (let r = first; r <= last; r++) {
+      const row = this.doc.rows[r], from = Math.max(start, row.start), to = Math.min(end, row.end);
+      if (from > to) continue;
+      let width = (to - from) * charWidth;
+      if (end > row.end && !this.isSoftWrapped(r)) width += charWidth * .5; // a selected line break
+      if (width > 0) ctx.fillRect(this.columnX(from, row, origin), origin.y + r * lineHeight, width, lineHeight);
+    }
+  }
+
+  drawPlaceholder(origin) {
+    if (this.doc.cells.length || this.burningGlyphs.length) return;
+    ctx.fillStyle = rgba(palette.text, .35);
+    ctx.fillText(PLACEHOLDER, origin.x, this.glyphY(origin.y));
+  }
+
+  drawText({ first, last }, origin) {
+    const { rows, cells } = this.doc;
+    ctx.fillStyle = rgba(palette.text);
+    for (let r = first; r <= last; r++) {
+      const row = rows[r], y = this.glyphY(origin.y + r * this.metrics.lineHeight);
+      for (let i = row.start; i < row.end; i++) ctx.fillText(cells[i].char, this.columnX(i, row, origin), y);
+    }
+  }
+
+  // Freshly typed glyphs cool from white heat through amber to the text color.
+  drawHeat(now, { first, last }, origin) {
+    const { rows, cells } = this.doc;
+    ctx.shadowColor = rgba(palette.spark);
+    for (let r = first; r <= last; r++) {
+      const row = rows[r], y = this.glyphY(origin.y + r * this.metrics.lineHeight);
+      for (let i = row.start; i < row.end; i++) {
+        const age = now - cells[i].struckAt;
+        if (age < 0 || age >= HEAT_DURATION_MS) continue;
+        const progress = age / HEAT_DURATION_MS;
+        const color = progress < .2
+          ? mix(palette.hot, palette.spark, progress / .2)
+          : mix(palette.spark, palette.text, smoothstep(clamp((progress - .2) / .6, 0, 1)));
+        ctx.fillStyle = rgba(color);
+        ctx.globalAlpha = smoothstep(clamp((1 - progress) / .45, 0, 1)); // fade the overlay so nothing pops at the end
+        ctx.shadowBlur = 16 * (1 - progress) ** 2;
+        ctx.fillText(cells[i].char, this.columnX(i, row, origin), y);
+      }
+    }
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+  }
+
+  // Deleted glyphs burn out like a campfire: yellow, red, then charred.
+  drawBurningGlyphs(now, origin) {
+    this.burningGlyphs = this.burningGlyphs.filter(glyph => now - glyph.startsAt < BURN_DURATION_MS);
+    const withGlow = this.burningGlyphs.length < 220; // shadows are expensive
+    for (const glyph of this.burningGlyphs) {
+      const x = origin.x + glyph.x, y = this.glyphY(origin.y + glyph.y);
+      const progress = (now - glyph.startsAt) / BURN_DURATION_MS;
+      if (progress < 0) { // the burn wave has not reached it yet
+        ctx.fillStyle = rgba(palette.text);
+        ctx.fillText(glyph.char, x, y);
+        continue;
+      }
+      const color = burnColor(progress);
+      ctx.globalAlpha = progress < .45 ? 1 : 1 - (progress - .45) / .55; // once the glow is spent it fades away
+      ctx.fillStyle = rgba(color);
+      if (withGlow) {
+        ctx.shadowColor = rgba(color);
+        ctx.shadowBlur = 18 * Math.min(1, progress / .1) * Math.max(0, 1 - progress / .7);
+      }
+      ctx.fillText(glyph.char, x, y);
+    }
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+  }
+
+  drawScrollThumb(box) {
+    const max = this.maxScroll();
+    if (!max) return;
+    const { viewHeight, lineHeight } = this.metrics;
+    const thumbHeight = Math.max(24, viewHeight ** 2 / (this.doc.rows.length * lineHeight));
+    ctx.fillStyle = rgba(palette.text, .28);
+    ctx.fillRect(box.left + box.width - 6, box.textTop + this.view.scroll / max * (viewHeight - thumbHeight), 3, thumbHeight);
+  }
+
+  drawCursor(now, dt, caretPosition, moving, origin) {
+    const { cursor } = this, { cursorInset } = this.metrics;
+    cursor.alpha = moving ? CURSOR_TRANSIT_ALPHA : Math.min(1, cursor.alpha + dt / .09);
+    ctx.beginPath();
+    for (const [x, y] of cursor.corners) ctx.lineTo(origin.x + x, origin.y + y + cursorInset);
+    ctx.closePath();
+
+    if (document.activeElement !== this.input) {
+      ctx.strokeStyle = rgba(palette.cursor, .7);
+      ctx.stroke();
+      return;
+    }
+    const idle = now - this.lastActivity;
+    const blinkVisible = moving || idle < 500 || idle % 1100 < 600;
+    if (!blinkVisible) return;
+    ctx.shadowColor = rgba(palette.cursor);
+    ctx.shadowBlur = 12 * cursor.alpha;
+    ctx.fillStyle = rgba(palette.cursor, cursor.alpha);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    const caretCell = this.doc.cells[this.doc.caret];
+    if (!moving && caretCell && caretCell.char !== '\n') {
+      ctx.fillStyle = rgba(palette.onCursor);
+      ctx.fillText(caretCell.char, origin.x + caretPosition.x, this.glyphY(origin.y + caretPosition.y));
+    }
+  }
+
+  // ---------- keyboard and text input ----------
+
+  resetInputBuffer() {
+    this.input.value = SENTINEL;
+    this.input.setSelectionRange(0, 1);
+  }
+
+  focus() {
+    this.input.focus({ preventScroll: true });
+    this.resetInputBuffer();
+  }
+
+  handleKeyDown(event) {
+    if (event.isComposing || event.keyCode === 229) return; // 229: Safari's code for a key the IME handles
+    stopDemo();
+    if (this.runShortcut(event)) {
+      event.preventDefault();
+      this.resetInputBuffer();
+    }
+  }
+
+  /** Returns whether the key was handled here rather than left to the browser. */
+  runShortcut(event) {
+    const extend = event.shiftKey;
+    const command = isMac ? event.metaKey : event.ctrlKey;
+    const unit = isMac && event.metaKey ? 'line' : (isMac ? event.altKey : event.ctrlKey) ? 'word' : 'char';
+    const pageRows = Math.max(1, this.metrics.visibleRowCount - 1);
+    const documentEnd = this.doc.cells.length;
+
+    switch (event.key) {
+      case 'ArrowLeft': this.moveHorizontally(-1, unit, extend); return true;
+      case 'ArrowRight': this.moveHorizontally(1, unit, extend); return true;
+      case 'ArrowUp': unit === 'line' ? this.moveCaret(0, extend) : this.moveVertically(-1, extend); return true;
+      case 'ArrowDown': unit === 'line' ? this.moveCaret(documentEnd, extend) : this.moveVertically(1, extend); return true;
+      case 'PageUp': this.moveVertically(-pageRows, extend); return true;
+      case 'PageDown': this.moveVertically(pageRows, extend); return true;
+      case 'Home': this.moveCaret(event.ctrlKey ? 0 : this.caretRowStart(), extend); return true;
+      case 'End': this.moveCaret(event.ctrlKey ? documentEnd : this.caretRowEnd(), extend); return true;
+      case 'Backspace': this.deleteBy(-1, unit); return true;
+      case 'Delete': this.deleteBy(1, unit); return true;
+      case 'Tab': this.typeText('  '); return true;
+      case 'Escape': this.moveCaret(this.doc.caret); return true;
+    }
+
+    const key = event.key.toLowerCase();
+    if (command && !event.altKey) {
+      if (key === 'a') { this.selectAll(); return true; }
+      if (key === 'z') { extend ? this.redo() : this.undo(); return true; }
+      if (key === 'y') { this.redo(); return true; }
+      return false; // copy, cut and paste arrive as clipboard events
+    }
+    if (isMac && event.ctrlKey) { // Emacs-style bindings that macOS text fields support
+      if (key === 'a') { this.moveCaret(this.caretRowStart(), extend); return true; }
+      if (key === 'e') { this.moveCaret(this.caretRowEnd(), extend); return true; }
+      if (key === 'k') { this.deleteBy(1, 'line'); return true; }
+      if (key === 'u') { this.deleteBy(-1, 'line'); return true; }
+    }
+    return false;
+  }
+
+  handleInput() {
+    const { value } = this.input;
+    if (this.composition.active) { this.updateComposition(value); return; }
+    const text = value.replaceAll(SENTINEL, '');
+    if (value === '') this.deleteBy(-1, 'char');
+    else if (text) this.typeText(text);
+    this.resetInputBuffer();
+  }
+
+  startComposition() {
+    this.recordUndo('other');
+    this.deleteSelection();
+    this.composition = { active: true, start: this.doc.caret, chars: [] };
+  }
+
+  // An IME (and many mobile keyboards) rewrites its pending text as you type; apply only what changed.
+  updateComposition(value) {
+    const { composition } = this;
+    const next = Array.from(value.replaceAll(SENTINEL, ''));
+    const previous = composition.chars;
+    let common = 0;
+    while (common < previous.length && common < next.length && previous[common] === next[common]) common++;
+    if (previous.length > common) {
+      this.removeRange(composition.start + common, composition.start + previous.length);
+      this.afterCaretChange();
+    }
+    if (next.length > common) this.insertText(next.slice(common).join(''));
+    composition.chars = next;
+  }
+
+  endComposition(event) {
+    this.updateComposition(event.data ?? '');
+    this.composition.active = false;
+    this.resetInputBuffer();
+  }
+
+  handleCopy(event) {
+    event.preventDefault();
+    if (!this.hasSelection()) return;
+    const { start, end } = this.selectionRange();
+    event.clipboardData.setData('text/plain', this.textBetween(start, end));
+  }
+
+  handleCut(event) {
+    this.handleCopy(event);
+    this.deleteSelection();
+  }
+
+  handlePaste(event) {
+    event.preventDefault();
+    stopDemo();
+    this.pasteText(event.clipboardData.getData('text/plain'));
+  }
+
+  // ---------- pointer ----------
+
+  handlePointerDown(event) {
+    stopDemo();
+    const index = this.indexAtPoint(event.clientX, event.clientY);
+    if (event.button === 2) { // right-click keeps the selection so the context menu's Cut and Copy act on it
+      const { start, end } = this.selectionRange();
+      if (index < start || index > end) this.moveCaret(index);
+      this.focus();
+      return;
+    }
+    if (event.button !== 0) return;
+    this.focus();
+    this.input.setPointerCapture(event.pointerId);
+    if (event.pointerType === 'touch') {
+      this.gesture = { kind: 'touch-scroll', startY: event.clientY, startScroll: this.view.scrollTarget, moved: false };
+      return;
+    }
+    const clickCount = this.countClick(index);
+    if (clickCount === 1) {
+      this.moveCaret(index, event.shiftKey);
+      this.gesture = { kind: 'select', unit: 'char' };
+      return;
+    }
+    // A double-click selects a word, a triple-click a paragraph; dragging on extends by that unit.
+    const unit = clickCount === 2 ? 'word' : 'paragraph';
+    const base = this.unitRangeAt(index, unit);
+    this.select(base.start, base.end);
+    this.gesture = { kind: 'select', unit, base };
+  }
+
+  countClick(index) {
+    const now = performance.now(), { clicks } = this;
+    const repeated = now - clicks.lastTime < MULTI_CLICK_MS && index === clicks.lastIndex;
+    this.clicks = { count: repeated ? clicks.count + 1 : 1, lastTime: now, lastIndex: index };
+    return this.clicks.count;
+  }
+
+  handlePointerMove(event) {
+    const { gesture } = this;
+    if (gesture.kind === 'touch-scroll') {
+      const distance = gesture.startY - event.clientY;
+      if (Math.abs(distance) > 6) gesture.moved = true;
+      if (gesture.moved) this.view.scroll = this.view.scrollTarget = clamp(gesture.startScroll + distance, 0, this.maxScroll());
+    } else if (gesture.kind === 'select') {
+      this.extendSelection(this.indexAtPoint(event.clientX, event.clientY));
+    }
+  }
+
+  extendSelection(index) {
+    const { doc } = this, { unit, base } = this.gesture;
+    if (unit === 'char') {
+      doc.caret = index;
+    } else {
+      // Keep the first word or paragraph selected and grow by whole units in either direction.
+      const range = this.unitRangeAt(index, unit);
+      if (range.start < base.start) {
+        doc.anchor = base.end;
+        doc.caret = range.start;
+      } else {
+        doc.anchor = base.start;
+        doc.caret = Math.max(range.end, base.end);
+      }
+    }
+    this.afterCaretChange();
+  }
+
+  handlePointerEnd(event) {
+    const { gesture } = this;
+    const isTap = gesture.kind === 'touch-scroll' && !gesture.moved && event.type === 'pointerup';
+    if (isTap) this.moveCaret(this.indexAtPoint(event.clientX, event.clientY));
+    this.gesture = { kind: 'none' };
+  }
+
+  handleWheel(event) {
+    const { view } = this;
+    const delta = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY * this.metrics.lineHeight : event.deltaY;
+    const target = clamp(view.scrollTarget + delta, 0, this.maxScroll());
+    if (target === view.scrollTarget) return; // at either end the page scrolls instead
+    event.preventDefault();
+    view.scrollTarget = target;
+  }
+}
+
+// ---------- particles (shared by all editors) ----------
+
+function burst(x, y, power) {
+  if (prefersReducedMotion) return;
+  flashes.push({ x, y, startedAt: performance.now(), power });
+  const count = Math.round((9 + Math.random() * 9) * power);
+  for (let i = 0; i < count; i++) {
+    const angle = -Math.PI / 2 + (Math.random() - .5) * Math.PI * 1.5;
+    const speed = 60 + Math.random() ** 2 * 460;
+    const life = .22 + Math.random() * .6;
+    particles.push({
+      kind: 'spark', delay: 0, x, y,
+      vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - 40,
+      life, maxLife: life, size: .8 + Math.random() * 1.1, forks: Math.random() < .14,
+    });
+  }
+  if (particles.length > MAX_PARTICLES) particles.splice(0, particles.length - MAX_PARTICLES);
+}
+
+function emitEmbers(x, y, delaySeconds, count, { charWidth, lineHeight }) {
+  for (let k = 0; k < count; k++) {
+    const life = .3 + Math.random() * .45;
+    particles.push({
+      kind: 'ember', delay: delaySeconds + .05 + Math.random() * .2,
+      x: x + Math.random() * charWidth, y: y + lineHeight * (.25 + Math.random() * .4),
+      vx: (Math.random() - .5) * 50, vy: -30 - Math.random() * 80,
+      life, maxLife: life, size: 1 + Math.random() * .8,
+    });
+  }
+}
+
+function emitSmoke(x, y, delaySeconds, { charWidth, lineHeight }) {
+  const life = 1 + Math.random() * .5;
+  const charredAfter = BURN_DURATION_MS / 1000 * .55;
+  particles.push({
+    kind: 'smoke', delay: delaySeconds + charredAfter + Math.random() * .12,
+    x: x + charWidth / 2, y: y + lineHeight * .35,
+    vx: (Math.random() - .5) * 10, vy: -14 - Math.random() * 12,
+    life, maxLife: life, size: 3 + Math.random() * 2,
+  });
+}
+
+function updateParticles(dt) {
+  const offspring = [];
+  for (const particle of particles) {
+    if (particle.delay > 0) { particle.delay -= dt; continue; }
+    particle.life -= dt;
+    if (particle.kind === 'spark') applySparkPhysics(particle, dt, offspring);
+    else if (particle.kind === 'ember') particle.vy -= 30 * dt;   // embers drift up
+    else particle.vy *= Math.exp(-.6 * dt);                       // smoke slows as it rises
+    particle.x += particle.vx * dt;
+    particle.y += particle.vy * dt;
+  }
+  particles = particles.filter(particle => particle.life > 0).concat(offspring);
+}
+
+function applySparkPhysics(spark, dt, offspring) {
+  const drag = Math.exp(-1.6 * dt);
+  spark.vy = (spark.vy + 950 * dt) * drag;
+  spark.vx *= drag;
+  const floor = viewport.height - 1;
+  if (spark.y > floor && spark.vy > 0) {
+    spark.y = floor;
+    spark.vy *= -.32;
+    spark.vx *= .6;
+  }
+  if (spark.forks && spark.life < spark.maxLife * .55) {
+    spark.forks = false;
+    for (const angle of [-.5, .5]) {
+      const cos = Math.cos(angle), sin = Math.sin(angle);
+      offspring.push({
+        kind: 'spark', delay: 0, x: spark.x, y: spark.y,
+        vx: (spark.vx * cos - spark.vy * sin) * .8, vy: (spark.vx * sin + spark.vy * cos) * .8,
+        life: .2, maxLife: .2, size: spark.size * .7, forks: false,
+      });
+    }
+  }
+}
+
+function burnColor(progress) {
+  if (progress < .1) return mix(palette.text, palette.flame, progress / .1);
+  if (progress < .45) return mix(palette.flame, palette.burn, (progress - .1) / .35);
+  return mix(palette.burn, palette.char, Math.min(1, (progress - .45) / .35));
+}
+
+function drawParticles(now) {
+  ctx.globalCompositeOperation = 'lighter';
+  drawFlashes(now);
+  for (const particle of particles) {
+    if (particle.delay > 0) continue;
+    const remaining = clamp(particle.life / particle.maxLife, 0, 1);
+    if (particle.kind === 'spark') drawSpark(particle, remaining);
+    else if (particle.kind === 'ember') drawEmber(particle, remaining);
+  }
+  // Smoke is drawn normally so it veils what is behind it instead of glowing.
+  ctx.globalCompositeOperation = 'source-over';
+  for (const particle of particles) {
+    if (particle.kind === 'smoke' && particle.delay <= 0) drawSmoke(particle, clamp(particle.life / particle.maxLife, 0, 1));
+  }
+}
+
+function drawFlashes(now) {
+  flashes = flashes.filter(flash => now - flash.startedAt < FLASH_DURATION_MS);
+  for (const flash of flashes) {
+    const strength = (1 - (now - flash.startedAt) / FLASH_DURATION_MS) * palette.flashStrength;
+    const radius = 10 + 26 * flash.power;
+    const gradient = ctx.createRadialGradient(flash.x, flash.y, 0, flash.x, flash.y, radius);
+    gradient.addColorStop(0, rgba(palette.hot, .85 * strength));
+    gradient.addColorStop(.35, rgba(palette.cursor, .3 * strength));
+    gradient.addColorStop(1, rgba(palette.cursor, 0));
+    ctx.fillStyle = gradient;
+    ctx.fillRect(flash.x - radius, flash.y - radius, radius * 2, radius * 2);
+  }
+}
+
+function drawSpark(spark, remaining) {
+  const color = remaining > .66
+    ? mix(palette.spark, palette.hot, (remaining - .66) / .34)
+    : mix(palette.ember, palette.spark, remaining / .66);
+  ctx.strokeStyle = rgba(color, Math.min(1, remaining * 1.8));
+  ctx.lineWidth = spark.size;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(spark.x - spark.vx * .03, spark.y - spark.vy * .03); // a short motion streak
+  ctx.lineTo(spark.x, spark.y);
+  ctx.stroke();
+  ctx.lineWidth = 1;
+}
+
+function drawEmber(ember, remaining) {
+  ctx.fillStyle = rgba(mix(palette.burn, palette.spark, remaining * remaining * .6), remaining);
+  ctx.fillRect(ember.x, ember.y, ember.size, ember.size);
+}
+
+function drawSmoke(smoke, remaining) {
+  const age = 1 - remaining, radius = smoke.size + 2 + age * 13;
+  const alpha = SMOKE_PEAK_ALPHA * Math.min(1, age * 5) * remaining;
+  const gradient = ctx.createRadialGradient(smoke.x, smoke.y, 0, smoke.x, smoke.y, radius);
+  gradient.addColorStop(0, rgba(palette.smoke, alpha));
+  gradient.addColorStop(.55, rgba(palette.smoke, alpha * .45));
+  gradient.addColorStop(1, rgba(palette.smoke, 0));
+  ctx.fillStyle = gradient;
+  ctx.fillRect(smoke.x - radius, smoke.y - radius, radius * 2, radius * 2);
+}
+
+// ---------- demo ----------
+// A scripted run of typing, cursor travel and deletion in the first editor. Stopping it,
+// or letting it finish, puts back whatever the writer had typed there before.
+
+class DemoStopped extends Error {}
+
+function stopDemo() {
+  if (demoRun.stopped) return;
+  demoRun.stopped = true;
+  demoRun.editor.restoreSnapshot(demoRun.saved);
+  demoButton.textContent = 'Play demo';
+}
+
+async function playDemo(editor) {
+  const saved = editor.snapshot();
+  const run = demoRun = { stopped: false, editor, saved };
+  demoButton.textContent = 'Stop demo';
+  editor.focus();
+  try {
+    await runDemoScript(editor, demoActions(editor, run));
+  } catch (error) {
+    if (error instanceof DemoStopped) return; // stopDemo already put the writer's text back
+    throw error;
+  }
+  // The script ends by burning its own text; strike the writer's text back in.
+  editor.insertText(saved.cells.map(cell => cell.char).join(''));
+  editor.restoreSnapshot(saved, { cells: editor.doc.cells });
+  run.stopped = true;
+  demoButton.textContent = 'Play demo';
+}
+
+function demoActions(editor, run) {
+  function pause(ms) {
+    return new Promise((resolve, reject) => setTimeout(() => (run.stopped ? reject(new DemoStopped()) : resolve()), ms));
+  }
+  // Uneven delays, like hands typing.
+  async function say(text, slowness = 1) {
+    for (const char of text) {
+      editor.typeText(char);
+      await pause((char === '\n' ? 260 : char === ' ' ? 70 : 30 + Math.random() * 60) * slowness);
+    }
+  }
+  async function backspace(times, gapMs) {
+    for (let i = 0; i < times; i++) {
+      editor.deleteBy(-1, 'char');
+      await pause(gapMs);
+    }
+  }
+  async function go(index, pauseMs = 520) {
+    editor.moveCaret(index);
+    await pause(pauseMs);
+  }
+  async function pick(start, end) {
+    editor.select(start, end);
+    await pause(650);
+  }
+  async function paste(text, pauseMs) {
+    editor.pasteText(text);
+    await pause(pauseMs);
+  }
+  function at(text, offset = 0) { return editor.text().indexOf(text) + offset; }
+  return { pause, say, backspace, go, pick, paste, at };
+}
+
+async function runDemoScript(editor, { pause, say, backspace, go, pick, paste, at }) {
+  const documentEnd = () => editor.doc.cells.length;
+
+  // Clear the editor: everything burns.
+  if (documentEnd()) {
+    await pick(0, documentEnd());
+    editor.deleteBy(-1, 'char');
+    await pause(900);
+  }
+
+  // Every line is followed by the thing it describes.
+  await say('Typing creates sparks.\n');
+
+  // Three lines pasted at once, then each removed the way it says, row and all.
+  const lines = ['Delete text one character at a time.', 'Delete text one word at a time.', 'Delete whole line at once.'];
+  await paste(lines.join('\n'), 1300);
+  await go(at(lines[0], lines[0].length), 500);
+  await backspace(lines[0].length, 45);
+  await pause(250);
+  editor.deleteBy(1, 'char'); // the emptied row closes up
+  await pause(350);
+  await go(at(lines[1], lines[1].length), 450);
+  for (let i = 0; i < 8; i++) {
+    editor.deleteBy(-1, 'word');
+    await pause(280);
+  }
+  editor.deleteBy(1, 'char');
+  await pause(350);
+  await go(at(lines[2], lines[2].length), 450);
+  editor.deleteBy(-1, 'line');
+  await pause(800);
+
+  // Long diagonal throws, then a fast ricochet between the two lines.
+  await say('Cursor moves with a trail.');
+  await pause(500);
+  await go(at('Typing'), 600);
+  await go(at('trail.', 6), 600);
+  await go(at('sparks.', 7), 420);
+  await go(at('Cursor'), 420);
+  const ricochet = [['creates', 0], ['trail', 0], ['sparks.', 7], ['moves', 0], ['Typing', 0], ['with', 4], ['creates', 7], ['Cursor', 0]];
+  for (const [text, offset] of ricochet) await go(at(text, offset), 170);
+  await pause(400);
+  await go(at('Typing'), 300);
+  await go(documentEnd(), 600);
+  await say('\n');
+
+  // Typed at the end, cut, then pasted three times at the top.
+  const line = 'You can cut and paste.';
+  await say(line);
+  await pause(450);
+  await pick(at(line), at(line) + line.length); // only the text is cut, so the cursor waits on the emptied row
+  editor.deleteBy(-1, 'char');
+  await pause(650);
+  await go(0, 600);
+  for (let i = 0; i < 3; i++) await paste(line + '\n', 700);
+  await go(documentEnd(), 600);
+  await say('Kthxbye', 1.3);
+  await pause(1000);
+
+  await pick(0, documentEnd());
+  editor.deleteBy(-1, 'char');
+  await pause(900);
+}
+
+// ---------- theme ----------
+
+function toggleTheme() {
+  const root = document.documentElement;
+  root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('theme', root.dataset.theme);
+  palette = readPalette();
+}
+
+// ---------- wiring ----------
+
+const editors = [...document.querySelectorAll('.editor')].map(element => new FancyTextarea(element));
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(.05, (now - lastFrameTime) / 1000);
+  lastFrameTime = now;
+  updateParticles(dt);
+  ctx.setTransform(viewport.pixelRatio, 0, 0, viewport.pixelRatio, 0, 0);
+  ctx.clearRect(0, 0, viewport.width, viewport.height);
+  for (const editor of editors) editor.draw(now, dt);
+  drawParticles(now); // sparks are free to leave the editors
+}
+
+function measureAll() {
+  resizeCanvas();
+  for (const editor of editors) editor.measure();
+}
+
+demoButton.addEventListener('click', () => (demoRun.stopped ? playDemo(editors[0]) : stopDemo()));
+themeButton.addEventListener('click', toggleTheme);
+window.addEventListener('resize', measureAll);
+document.fonts.ready.then(measureAll);
+
+measureAll();
+editors[0].focus();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
